@@ -1,0 +1,7 @@
+span with { 
+    status: { 
+        code: 1+2-3
+    }, 
+    biz: 2,
+    baz: true
+}
