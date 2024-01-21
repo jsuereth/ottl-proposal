@@ -6,7 +6,7 @@
 use crate::{typer::TypedExpr, ast::BinaryOperator};
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
   Bool(bool),
   Int(i64),
@@ -15,7 +15,7 @@ pub enum Value {
   Nil,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum IR {
   // Lookup a value from the environment.
   // Uses a symbol/reference that could be `.` separated.
@@ -24,11 +24,17 @@ pub enum IR {
   FunctionApply(String, Vec<IR>),
   // Create a list from evaluating a bunch of IR.
   MakeList(Vec<IR>),
+  // A merge operation.
+  // This should be erased in one of the transformation stages.
   Merge(Box<IR>, Box<IR>),
   // A literal to return.
   Literal(Value),
   // A structure literal
+  // This should be erased by the time we're done transforming.
   StructLiteral(HashMap<String, IR>),
+  // A set of expressions to evaluate in parallel.
+  // These are created when erasing `StructLiteral` and `Merge`.
+  MultiExpr(Vec<IR>),
 }
 
 // We override field X with value from IR
@@ -126,6 +132,17 @@ impl std::fmt::Display for IR {
           }
           write!(f, "}}")
         },
+        IR::MultiExpr(exprs) => {
+          let mut first = true;
+          for expr in exprs {
+            if !first {
+              write!(f, "\n")?;
+            }
+            write!(f, "{}", expr)?;
+            first = false;
+          }
+          Ok(())
+        }
     }
   }
 }

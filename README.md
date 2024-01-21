@@ -85,14 +85,70 @@ We have an ad-hoc type inference system in place.  When inferring the type of a 
 to unify `Nil` => {special primitive types} => `AnyValue`.  This means lists are NOT guaranteed to
 be homogenous.
 
+## Compiler Phases
+
+1. Parser takes raw strings and turns it into an AST.
+2. Typer takes the AST and inferrs/assigned types returning a typed AST.
+3. IR transforms the AST into an intermediate representation on which we can perform our optimisations.
+4. transform has optimisations we execute before outputing our final interpretation nodes.
+   - We remove any mathematical operations that can be calculated at compile time.
+   - We flatten the `with` (Merge) operations to a set of `set(field,value)` operations.
+
+By the end of the compiler, the only IR nodes left should be:
+
+```
+MultiExpr(exprs) // Evaluate all of these.
+Lookup(id)       // Pull a value from context, e.g. span.status.code
+Literal(value)   // A compile-time constant to use/provide.
+MakeList(exprs)  // Construct a list using the expressions provided.
+FunctionApply(name, exprs) // Execute a function with given set of value.
+```
+
+Note: `MultiExpr` should NOT appear anywhere a single value is expected.
+
+## Built-In Environment
+
+- `span` has type `Span`
+- `metric` has type `Metric`
+- `resource` has type `Resource`
+
+### Built-in Types
+
+While this isn't expressible in the OTTL language, we define a symbol table against named
+types that looks as follows:
+
+```
+struct Time {}
+struct SpanID {}
+struct TraceID {}
+struct SpanStatus {
+  code Int,
+  message String,
+}
+struct Span {
+  name String,
+  kind Int,
+  status SpanStatus,
+  startTime Time,
+  endTime Time,
+  spanID SpanID,
+  traceId TraceID,
+  // TODO - attributes, events, dropped*
+}
+```
+
+The rest of the types are unimplemented as this is just a proof-of-concept.
+
 ## TODOs
 
-- [ ] Flatten structural merging to `Set` calls to showcase existing OTTL.
+- [X] Flatten structural merging to `Set` calls to showcase existing OTTL.
 - [ ] Implement string literals
 - [ ] Implement comperhensions for lists + key-value lists.
 - [ ] Move off nom-recursive to a more robust solution.
-- [ ] Evaluate literal arithmetic operations in compiler.
+- [X] Evaluate literal arithmetic operations in compiler.
 - [ ] Allow comments in the language.
+- [ ] Formal Type specification
+- [ ] Enforce requirements after each phase/transform of the tree.
 
 
 ## Examples
@@ -109,5 +165,6 @@ span with {
 becomes
 
 ```
-Merge(span,{status: {code: Plus(1, Minus(2, 3))}, kind: 2})
+set(span.status.code, 0)
+set(span.kind, 2)
 ```

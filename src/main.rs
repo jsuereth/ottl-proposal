@@ -2,6 +2,7 @@ pub mod ast;
 pub mod parser;
 pub mod typer;
 pub mod ir;
+pub mod transform;
 
 use std::error::Error;
 use crate::typer::{SymbolTable, Type, Typer, TypeError};
@@ -21,8 +22,10 @@ fn transpile(input: &str) -> Result<String, Box<dyn Error>> {
             assert_eq!(AsRef::<str>::as_ref(&rest), "", "Did not fully parse input!");
             let texpr = typer.type_expr(expr)?;
             let ir = from_typed_ast(texpr);
+            let pass_one = transform::evaluate_compile_time_expressions(ir);
+            let pass_two = transform::convert_merge_to_sets(pass_one);
             // TODO - Run through some optimisation phases.
-            Ok(format!("{}", ir))
+            Ok(format!("{}", pass_two))
         },
         // TODO - Figure out error handling in a better way.
         Err(_) => Err(Box::new(TypeError::todo())),
