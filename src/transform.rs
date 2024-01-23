@@ -36,7 +36,7 @@ fn evaluate_plus(lhs: Value, rhs: Value) -> Value {
         (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs+rhs),
         (Value::Double(lhs), Value::Double(rhs)) => Value::Double(lhs+rhs),
         (Value::String(lhs), Value::String(rhs)) => Value::String(format!("{}{}", lhs, rhs)),
-        // TODO - better error.
+        // TODO - better error, also type system should prevent this.
         (lhs,rhs) => panic!("Unable to add incompatible values: {}, {}", lhs, rhs),
     }
 }
@@ -44,7 +44,7 @@ fn evaluate_minus(lhs: Value, rhs: Value) -> Value {
     match (lhs, rhs) {        
         (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs-rhs),
         (Value::Double(lhs), Value::Double(rhs)) => Value::Double(lhs-rhs),
-        // TODO - better error.
+        // TODO - better error, also type system should prevent this.
         (lhs,rhs) => panic!("Unable to subtract incompatible values: {}, {}", lhs, rhs),
     }
 }
