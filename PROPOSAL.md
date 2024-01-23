@@ -62,9 +62,12 @@ At a high level we propose the following:
   lists or "KeyValueList" i.e. Attributes.
   - This should dramatically reduce need for built-in functions to be worthwhile.
   - This *should* replace need for: `limit`, `truncate_all`, `replace_*`, `keep_keys`, `delete_keys`.
-
+- We move to a multi-phase compilation so that we can not only add type checking but erase more advanced
+  features (e.g. structural merging, list-comprehensions) to simpler features for evaluation.
 
 ### Prototype Grammar
+
+We propose expanding the high level grammar to include the context in the syntax:
 
 Example:
 
@@ -74,11 +77,19 @@ Yield <expr>
 ( Where <expr> ) ?
 ```
 
+This matches the output of:
+
+- An "execution scope" it will execute against, e.g. `metric`, `resource`, `log`, etc.
+- A statement to execute which will manipulate a type of telemetry.
+- A boolean expression which determins whether its statement should be executed.
+
+
 We introduce new expressions:
 
 #### New Binary Expressions
 
 ```
+<expr> '.' <identifier> # More complicated "accessor" patterns.
 <expr> 'with' <expr>  # Merge/Assign operation
 <expr> 'in' <expr>    # Contains expression
 ```
@@ -86,6 +97,7 @@ We introduce new expressions:
 - Merge: Overrides fields in the left with fields found in the partial structure on the right
 - Contains: Returns true if the expression on the left is found in the container on the right.
   TODO - what to do about key-values?
+- Allow accessing members from any expression, but limit with the type system.
 
 #### Structural Expressions
 
@@ -93,3 +105,35 @@ We introduce new expressions:
 <structural-literal> := '{' <field-assignment>* '}'
 <field-assignemtn> := <field-name> ':' <expr> (',')?
 ```
+
+### Type System
+
+We define the following kind of types:
+
+- `AnyValue` - A special type, mostly acting as a union of types allowed in attributes.
+- `Nil` - A bottom type.
+- `Constructor(name, args)` - A named type, with possible type arguments (e.g. `Int`, `List[A]`)
+- `Structural(fields)` - A structural type consisting of known fields and their types.
+
+Additionally, for any named type (`Constructor(name, ..)`) we allow symbol table lookups for "members",
+and direct accessing of these via the `<expr> '.' <identifier>` syntax.
+
+TODO - Formal specification & inference rules
+
+- `Nil` is a subtype of all types.
+- `Bool`, `Int`, `Double`, `Bytes`, `ArrayValue`, `KeyValueList` are subtypes of `AnyValue`.
+- A `Structural` type is mergable with a named type IFF the `fields` of the structural type
+  are assignable to fields of the named type.
+
+We have an ad-hoc type inference system in place.  When inferring the type of a `List`, it is able
+to unify `Nil` => {special primitive types} => `AnyValue`.  This means lists are guaranteed to infer to either `List[AnyValue]` (heterogenous) or `List[A]` (homogenous).
+
+### OTTL Compiler Phases.
+
+We propose modifying OTTL to use the following phases (or more):
+
+1. Lexer
+2. Parser -> Initial Structure
+3. Typer -> Adds types to Initial Structure
+4. Simplifier -> Removes nodes and flattens out concepts
+   - We can "erase" certain concepts, like structural literals, e.g.
