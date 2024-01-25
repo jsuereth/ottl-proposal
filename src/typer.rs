@@ -23,8 +23,23 @@ pub enum TypedStatementType {
     Yield(Box<TypedExpr>),
 }
 
+impl TypedStatementType {
+    pub fn stream_type(&self) -> Type {
+        match self {
+            Self::Drop => Type::Nil,
+            Self::Yield(expr) => expr.my_type(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TypedStatement(pub StreamIdentifier, Option<TypedPatternMatch>, TypedStatementType, Option<TypedExpr>);
+
+impl TypedStatement {
+    pub fn stream_type(&self) -> Type {
+        self.2.stream_type()
+    }
+}
 
 #[derive(Debug)]
 pub enum TypedExpr {
@@ -850,10 +865,19 @@ fn register_standard_types(typer: &mut Typer) {
         fields: span_fields,
     };
     typer.scope_mut().register_structure(span);
+    typer.scope_mut().register_structure(StructSymbol {
+        name: "Metric".into(),
+        fields: [
+            ("name".into(), Type::String()),
+            ("description".into(), Type::String()),
+            ("unit".into(), Type::String()),
+            ("sum".into(), Type::Simple("Sum")),
+        ].into(),
+    });
 
     // Here we register standard extractors.
     typer.scope_mut().register_simple_term(
-        "Sum", 
+        "aSum", 
         Type::Function(Type::Constructor("Option".into(), vec!(Type::Simple("Sum"))), vec!(Type::Simple("Metric")))
     );
 }
@@ -906,7 +930,9 @@ mod tests {
     #[test]
     fn test_pattern_match() {
         let mut typer = Typer::new(SymbolTable::new());
-        let result = parse_statement_and_type(&mut typer, "on metric when metric is Sum(sum) yield sum").unwrap();
+        let result: TypedStatement = parse_statement_and_type(&mut typer, "on metric when metric is aSum(sum) yield metric with { sum: sum }").unwrap();
+        // TODO - write a real test here.
+        assert_eq!(result.stream_type(), Type::Simple("Metric"));
         panic!("{result:?}")
     }
 
