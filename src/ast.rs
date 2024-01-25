@@ -110,3 +110,14 @@ impl std::fmt::Display for BinaryOperator {
         }
     }
 }
+
+impl std::fmt::Display for StreamIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamIdentifier::Log => write!(f, "log"),
+            StreamIdentifier::Metric => write!(f, "metric"),
+            StreamIdentifier::Span => write!(f, "span"),
+            StreamIdentifier::SpanEvent => write!(f, "spanevent"),
+        }
+    }
+}

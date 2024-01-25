@@ -2,7 +2,7 @@ use crate::ir::*;
 
 // Helper method which will ensure a transformation function F is called
 // recursively over the IR trees.
-fn transform_helper<F>(ir: IR, f: F) -> IR
+pub fn transform_helper<F>(ir: IR, f: F) -> IR
   where F: Copy + Fn(IR) -> IR {
     match ir {
         IR::FunctionApply(name, args) =>

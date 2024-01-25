@@ -3,8 +3,19 @@
 
 // // TODO - Should we include types here?
 
-use crate::{typer::TypedExpr, ast::BinaryOperator};
-use std::collections::HashMap;
+use crate::{typer::{TypedExpr, TypedStatement, TypedStatementType, TypedPatternMatch, TypedExtractor}, ast::BinaryOperator, ast::StreamIdentifier, transform};
+use std::collections::{HashMap, BTreeMap};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IRStatement {
+  // Identifier denoting the type of stream this applies to.
+  pub stream_id: StreamIdentifier,
+  // An expression returning true or false determining if
+  // this statement should execute on an input.
+  pub guard: IR,
+  // What to do with the input.
+  pub expr: IR,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -40,6 +51,117 @@ pub enum IR {
 // We override field X with value from IR
 #[derive(Debug, PartialEq)]
 pub struct FieldOverride(String, Box<IR>);
+
+// Returns an IR "guard" (boolean expression) and list of name->expr overrides for other IR.
+fn pattern_replacements(expr: IR, pattern: TypedExtractor) -> (Option<IR>, BTreeMap<String, IR>) {
+  match pattern {
+    TypedExtractor::Term(id, _) => (None, [(id, expr)].into()),
+    TypedExtractor::Pattern(name, args, _) => {
+      let extractor = IR::FunctionApply(name, vec![expr]);
+      let guard = IR::FunctionApply("IsSome".into(), vec!(extractor.clone()));
+      let ex_opt = IR::FunctionApply("OptGet".into(), vec!(extractor.clone()));
+      let is_tuple = args.len() > 1;
+      args.into_iter()
+      .enumerate()
+      .map(|(idx, arg)| {        
+        let arg_access_expr =
+          if is_tuple {
+            IR::FunctionApply(format!("TupleGet{idx}"), vec!(ex_opt.clone()))
+          } else {
+            ex_opt.clone()
+          };
+        pattern_replacements(arg_access_expr, arg)
+      }).fold((Some(guard), BTreeMap::new()), |(guard, patterns), (next_guard, next_patterns)| {
+        let new_guard = 
+          match (guard, next_guard) {
+            (Some(lhs), Some(rhs)) => Some(IR::FunctionApply("and".into(), vec!(lhs, rhs))),
+            (g @ Some(_), None) | (None, g @ Some(_)) => g,
+            (None, None) => None,
+          };
+        let mut new_patterns = BTreeMap::new();
+        new_patterns.extend(patterns.into_iter());
+        new_patterns.extend(next_patterns.into_iter());
+        (new_guard, new_patterns)
+      })
+    },
+  }
+}
+
+// Replaces lookups with their pattern matching expression
+fn replace_raw(ir: IR, replacements: &BTreeMap<String, IR>) -> IR {
+  match &ir {
+    IR::Lookup(name) => 
+      match replacements.get(name) {
+        Some(v) => v.clone(),
+        None => ir,
+      },
+    _ => ir,
+  }
+}
+
+// Returns the guard expression *and* pattern match name replacements.
+fn pattern_match_replacements(pattern: TypedPatternMatch) -> (IR, BTreeMap<String, IR>) {
+  let TypedPatternMatch(expr, pattern, guard) = pattern;
+  let base_expr = from_typed_ast(*expr);
+  let (pguard, replacements) = pattern_replacements(base_expr, pattern);
+  // Replace guard's expressions with replacements
+  // from pattern matching.
+  let final_guard = match (guard, pguard) {
+    (Some(expr), Some(p)) => {
+      let gir = from_typed_ast(expr);
+      let nguard = crate::transform::transform_helper(gir, |ir| replace_raw(ir, &replacements));
+      IR::FunctionApply("And".into(), vec!(p, nguard))
+    },
+    (Some(p), None) => crate::transform::transform_helper(
+      from_typed_ast(p), |ir| replace_raw(ir, &replacements)),
+    (None, Some(p)) => p,
+    (None, None) => IR::Literal(Value::Bool(true)),
+  };  
+  (final_guard, replacements)
+}
+
+pub fn from_typed_statement(stmt: TypedStatement) -> IRStatement {
+  match (stmt.opt_pattern(), stmt.where_expr()) {
+    (Some(pattern), Some(guard)) => {
+      //  We need to unify the guard w/ the guard form the pattern.
+      todo!()
+    },
+    (Some(pattern), None) => {
+      let (guard, replacements) = pattern_match_replacements(pattern.clone());
+      IRStatement {
+        stream_id: stmt.stream_id(),
+        guard,
+        expr: match stmt.statement_type() {
+          TypedStatementType::Drop => IR::FunctionApply("Drop".into(), [].into()),
+          TypedStatementType::Yield(expr) => {
+            let raw = from_typed_ast(*expr.clone());
+            transform::transform_helper(raw, |ir| replace_raw(ir, &replacements))
+          },
+        }
+      }
+    },
+    (None, Some(guard)) => {
+      IRStatement {
+        stream_id: stmt.stream_id(),
+        guard: from_typed_ast(guard.clone()),
+        expr: match stmt.statement_type() {
+          TypedStatementType::Drop => IR::FunctionApply("Drop".into(), [].into()),
+          TypedStatementType::Yield(expr) => from_typed_ast(*expr.clone()),
+        },
+      }
+    },
+    (None, None) => {
+      IRStatement {
+        stream_id: stmt.stream_id(),
+        guard: IR::Literal(Value::Bool(true)),
+        expr: match stmt.statement_type() {
+          TypedStatementType::Drop => IR::FunctionApply("Drop".into(), [].into()),
+          TypedStatementType::Yield(expr) => from_typed_ast(*expr.clone()),
+        },
+      }
+    },
+  }
+}
 
 // // Convert from our language to something closer to existing OTTL.
 pub fn from_typed_ast(expr: TypedExpr) -> IR {
@@ -159,12 +281,33 @@ impl std::fmt::Display for Value {
   }
 }
 
+impl std::fmt::Display for IRStatement {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "context: {}, guard: {}, expr: {}", self.stream_id, self.guard, self.expr)
+  }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::error::Error;
     use crate::typer::{SymbolTable, Typer, TypeError, Type};
-    use crate::parser::{parse_expr, mk_parser_input};
+    use crate::parser::{parse_expr, mk_parser_input, parse_statement};
+
+    fn parse_to_ir_statement(input: &str) -> Result<IRStatement, Box<dyn Error>> {
+      let mut typer = Typer::new(SymbolTable::new());
+      let pinput = mk_parser_input(input);
+      match parse_statement(pinput) {
+          Ok((rest, stmt)) => {
+              assert_eq!(AsRef::<str>::as_ref(&rest), "", "Did not fully parse input!");
+              let tstmt = typer.type_statement(stmt)?;
+              let ir = from_typed_statement(tstmt);
+              Ok(ir)
+          },
+          // TODO - Figure out error handling in a better way.
+          Err(_) => Err(Box::new(TypeError::todo())),
+      }
+   }
 
     fn parse_to_ir(input: &str, typer: &mut Typer) -> Result<IR, Box<dyn Error>> {
         let pinput = mk_parser_input(input);
@@ -213,5 +356,15 @@ mod tests {
           ])
         ))
       ))
+  }
+
+  #[test]
+  fn test_safely_translates_pattern_match() {
+    let result = parse_to_ir_statement(
+      "on metric when metric is aSum(sum) yield metric with { sum: sum }"
+    ).unwrap();
+    assert_eq!(result.stream_id, StreamIdentifier::Metric);
+    assert_eq!(format!("{}", result.guard), "IsSome(aSum(metric))");
+    assert_eq!(format!("{}", result.expr), "Merge(metric,{sum: OptGet(aSum(metric))}");
   }
 }

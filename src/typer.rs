@@ -8,16 +8,16 @@ type Substitutions = BTreeMap<u64, Type>;
 
 
 // TODO - Finish typed AST
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TypedExtractor {
     Term(String, Type),
     Pattern(String, Vec<TypedExtractor>, Type),
 }
 
-#[derive(Debug)]
-pub struct TypedPatternMatch(Box<TypedExpr>, TypedExtractor, Option<TypedExpr>);
+#[derive(Clone, Debug)]
+pub struct TypedPatternMatch(pub Box<TypedExpr>, pub TypedExtractor, pub Option<TypedExpr>);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TypedStatementType {
     Drop,
     Yield(Box<TypedExpr>),
@@ -32,7 +32,7 @@ impl TypedStatementType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TypedStatement(pub StreamIdentifier, Option<TypedPatternMatch>, TypedStatementType, Option<TypedExpr>);
 
 impl TypedStatement {
@@ -56,7 +56,7 @@ impl TypedStatement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TypedExpr {
     Id(String, Type),
     List(Vec<TypedExpr>, Type),
@@ -87,7 +87,7 @@ impl TypedExpr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TypedFieldAssignment(String, Box<TypedExpr>);
 
 impl TypedFieldAssignment {
