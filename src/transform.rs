@@ -1,5 +1,16 @@
 use crate::ir::*;
 
+// Transforms IR nodes within a statement.
+pub fn transform_statement_helper<F>(ir: IRStatement, f: F) -> IRStatement 
+  where F: Copy + Fn(IR) -> IR {
+
+    IRStatement { 
+        stream_id: ir.stream_id, 
+        guard: transform_helper(ir.guard, f), 
+        expr: transform_helper(ir.expr, f),
+    }
+}
+
 // Helper method which will ensure a transformation function F is called
 // recursively over the IR trees.
 pub fn transform_helper<F>(ir: IR, f: F) -> IR
@@ -52,11 +63,13 @@ fn evaluate_minus(lhs: Value, rhs: Value) -> Value {
 // We can add more optimisations here as we find the need.
 fn evaluate_compile_time_function(name: String, args: Vec<IR>) -> IR {
     if name == "Plus" {
+        println!("Attempting to shrink: Plus {args:?}");
         match args.as_slice() {
             [IR::Literal(lhs), IR::Literal(rhs)] => IR::Literal(evaluate_plus(lhs.clone(), rhs.clone())),
             _ => IR::FunctionApply(name, args),
         }
     } else if name == "Minus" {
+        println!("Attempting to shrink: Minus {args:?}");
         match args.as_slice() {
             [IR::Literal(lhs), IR::Literal(rhs)] => IR::Literal(evaluate_minus(lhs.clone(), rhs.clone())),
             _ => IR::FunctionApply(name, args),
@@ -66,10 +79,20 @@ fn evaluate_compile_time_function(name: String, args: Vec<IR>) -> IR {
     }
 }
 
-pub fn evaluate_compile_time_expressions(ir: IR) -> IR {
-    transform_helper(ir, move |ir| {
-        match ir {
-            IR::FunctionApply(name, args) => evaluate_compile_time_function(name,args),
+// pub fn evaluate_compile_time_expressions(ir: IR) -> IR {
+//     transform_helper(ir, move |ir| {
+//         match ir {
+//             IR::FunctionApply(name, args) => evaluate_compile_time_function(name,args),
+//             other => other,
+//         }
+//     })
+// }
+
+pub fn evaluate_compile_time_expressions(ir: IRStatement) -> IRStatement {
+    transform_statement_helper(ir, move |i: IR| {
+        println!("Evaluating: {i}");
+        match i {
+            IR::FunctionApply(name, args) => evaluate_compile_time_function(name, args),
             other => other,
         }
     })
@@ -110,11 +133,19 @@ fn transform_merge_to_set(lhs: IR, rhs: IR) -> IR {
 }
 
 // This should convert every "merge' operations into a list of `set` operations.
-pub fn convert_merge_to_sets(ir: IR) -> IR {
+fn convert_merge_to_sets(ir: IR) -> IR {
     transform_helper(ir, move |ir| {
         match ir {
             IR::Merge(lhs,rhs) => transform_merge_to_set(*lhs, *rhs),
             other => other,
         }
     })
+}
+
+pub fn convert_merge_to_sets_on_yield(ir: IRStatement) -> IRStatement {
+    IRStatement {
+        stream_id: ir.stream_id,
+        guard: ir.guard,
+        expr: convert_merge_to_sets(ir.expr),
+    }
 }

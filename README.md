@@ -153,11 +153,14 @@ The rest of the types are unimplemented as this is just a proof-of-concept.
 
 ## Examples
 
+*Structural literal with compile-time-evaluation*
+
 ```
-span with { 
-    status: { 
+on span
+yield span with {
+    status: {
         code: 1+2-3
-    }, 
+    },
     kind: 2
 }
 ```
@@ -165,6 +168,32 @@ span with {
 becomes
 
 ```
-set(span.status.code, 0)
-set(span.kind, 2)
+context: span
+guard: true
+expr: set(span.kind, 2)
+      set(span.status.code, 0)
 ```
+
+*Pattern match with expansion to guard*
+
+```
+on metric
+when metric is aSum(sum)
+yield metric with { 
+    sum: sum 
+}
+```
+
+
+becomes
+
+```
+context: metric
+guard: IsSome(aSum(metric))
+expr: set(metric.sum, OptGet(aSum(metric)))
+```
+
+Note: this assumes:
+- `aSum` built in function of `(*Metric) Option[*Sum]`.
+- `IsSome` built in function of `[k] (*Option[k]) bool`.
+- `OptGet` built-in function of `[k] (*Option[k]) k`.

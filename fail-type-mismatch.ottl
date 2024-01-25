@@ -1,4 +1,5 @@
-span with { 
+on span
+yield span with { 
     status: { 
         code: 1+2-3
     }, 

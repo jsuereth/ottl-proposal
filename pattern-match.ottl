@@ -1,0 +1,5 @@
+on metric
+when metric is aSum(sum)
+yield metric with { 
+    sum: sum 
+}

@@ -283,7 +283,7 @@ impl std::fmt::Display for Value {
 
 impl std::fmt::Display for IRStatement {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "context: {}, guard: {}, expr: {}", self.stream_id, self.guard, self.expr)
+    write!(f, "context: {}\nguard: {}\nexpr: {}\n", self.stream_id, self.guard, self.expr)
   }
 }
 
