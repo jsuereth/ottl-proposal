@@ -16,6 +16,23 @@ Specifically, we're investigating a few optimisations:
 A hazy definition of the grammar.
 
 ```
+<statement> :=
+  on <context-identifier>
+  (<pattern-match>)?
+  <statement-action>
+
+<context-identifier> := 'span' | 'spanevent' | 'metrics' | 'log'
+
+<statement-action> :=
+  'drop' | 
+  'yield' <expr>
+
+<pattern-match> := 'when' <expr> 'is' <pattern-extractor>
+
+<pattern-extractor> := 
+  <identifier> |
+  <identifier> '(' <pattern_extractor> ')'
+
 <expr> := 
   <application> |
   <binary_expr> |
