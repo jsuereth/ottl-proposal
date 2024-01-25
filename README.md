@@ -152,9 +152,30 @@ struct Span {
   traceId TraceID,
   // TODO - attributes, events, dropped*
 }
+
+struct Log {
+  spanID SpanID,
+  traceId TraceID,
+  time Time,
+  observed_time Time,
+  severity_number Int,
+  severity_text String,
+  body AnyVal,
+  flags Int,
+  // TODO - attributes
+}
 ```
 
 The rest of the types are unimplemented as this is just a proof-of-concept.
+
+
+### Built-in Symbols / Functions
+
+We expose the following built-in symbols (note this is pseudo-code not expressable OTTL)
+
+```go
+func aSum(metric *Metric) Option[*Sum]
+```
 
 ## TODOs
 

@@ -849,36 +849,28 @@ fn register_standard_types(typer: &mut Typer) {
     let span_id_type = Type::Simple("SpanID");
     let trace_id_type = Type::Simple("TraceID");
 
-    // TODO - we need to register AnyValue as a union type but
-    // it is self-recursive with itself, thanks to List[AnyValue]....
-    // OR we can directly lift KvList/ArrayList into typesystem...
-
-    // Span Status Type
-    let mut span_status_fields = BTreeMap::new();
-    span_status_fields.insert("code".into(), Type::Int());
-    span_status_fields.insert("message".into(), Type::String());
-    let span_status = StructSymbol {
+    typer.scope_mut().register_structure(StructSymbol {
         name: "SpanStatus".into(),
-        fields: span_status_fields,
-    };
-    typer.scope_mut().register_structure(span_status);
-    // Span Type
-    let mut span_fields = BTreeMap::new();
-    span_fields.insert("name".into(), Type::String());
-    span_fields.insert("kind".into(), Type::Int());
-    span_fields.insert("status".into(), Type::Simple("SpanStatus"));
-    span_fields.insert("startTime".into(), time_type.clone());
-    span_fields.insert("endTime".into(), time_type.clone());
-    span_fields.insert("spanID".into(), span_id_type.clone());
-    span_fields.insert("traceID".into(), trace_id_type.clone());
-    // TODO - attributes
-    // TODO - events
-    // TODO - dropped_*
-    let span: StructSymbol = StructSymbol {
+        fields: [
+            ("code".into(), Type::Int()),
+            ("message".into(), Type::String()),
+        ].into(),
+    });
+    typer.scope_mut().register_structure(StructSymbol {
         name: "Span".into(),
-        fields: span_fields,
-    };
-    typer.scope_mut().register_structure(span);
+        fields: [
+            ("name".into(), Type::String()),
+            ("kind".into(), Type::Int()),
+            ("status".into(), Type::Simple("SpanStatus")),
+            ("startTime".into(), time_type.clone()),
+            ("endTime".into(), time_type.clone()),
+            ("spanID".into(), span_id_type.clone()),
+            ("traceID".into(), trace_id_type.clone()),
+            // TODO - attributes
+            // TODO - events
+            // TODO - dropped_*
+        ].into(),
+    });    
     typer.scope_mut().register_structure(StructSymbol {
         name: "Metric".into(),
         fields: [
@@ -886,6 +878,20 @@ fn register_standard_types(typer: &mut Typer) {
             ("description".into(), Type::String()),
             ("unit".into(), Type::String()),
             ("sum".into(), Type::Simple("Sum")),
+        ].into(),
+    });
+
+    typer.scope_mut().register_structure(StructSymbol {
+        name: "Log".into(),
+        fields: [
+            ("spanID".into(), span_id_type.clone()),
+            ("traceID".into(), trace_id_type.clone()),
+            ("time".into(), time_type.clone()),
+            ("observed_time".into(), time_type.clone()),
+            ("severity_text".into(), Type::String()),
+            ("severity_number".into(), Type::Int()),
+            ("body".into(), Type::AnyValue),
+            ("flags".into(), Type::Int()),
         ].into(),
     });
 
