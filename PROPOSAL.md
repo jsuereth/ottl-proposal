@@ -238,3 +238,126 @@ We propose modifying OTTL to use the following phases (or more):
 3. Typer -> Adds types to Initial Structure
 4. Simplifier -> Removes nodes and flattens out concepts
    - We can "erase" certain concepts, like structural literals, e.g.
+
+
+## Motivating Example
+
+We'd like to convert the JSON structure used in Google Cloud's structured logging to OTLP.
+
+- See: https://cloud.google.com/logging/docs/structured-logging for the original format
+- See: https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/logs/data-model-appendix.md#google-cloud-logging for translation requirements.
+
+
+Here's an example log JSON body from the links above:
+
+```json
+{
+  "severity":"ERROR",
+  "message":"There was an error in the application.",
+  "httpRequest":{
+    "requestMethod":"GET"
+  },
+  "times":"2020-10-12T07:20:50.52Z",
+  "logging.googleapis.com/insertId":"42",
+  "logging.googleapis.com/labels":{
+    "user_label_1":"value_1",
+    "user_label_2":"value_2"
+  },
+  "logging.googleapis.com/operation":{
+    "id":"get_data",
+    "producer":"github.com/MyProject/MyApplication",
+     "first":"true"
+  },
+  "logging.googleapis.com/sourceLocation":{
+    "file":"get_data.py",
+    "line":"142",
+    "function":"getData"
+  },
+  "logging.googleapis.com/spanId":"000000000000004a",
+  "logging.googleapis.com/trace":"projects/my-projectid/traces/06796866738c859f2f19b7cfb3214824",
+  "logging.googleapis.com/trace_sampled":false
+}
+```
+
+Here's an existing OTTL transformation on this JSON body to make it OTLP friendly.
+
+```
+context: log
+statements:
+- set(body, ParseJSON(body["message"])) where (body != nil and body["message"] != nil)
+- merge_maps(attributes, body["logging.googleapis.com/labels"], "upsert") where body["logging.googleapis.com/labels"] != nil
+- delete_key(body, "logging.googleapis.com/labels") where (body != nil and body["logging.googleapis.com/labels"] != nil)
+- delete_key(cache, "__field_0") where (cache != nil and cache["__field_0"] != nil)
+- set(cache["__field_0"], body["logging.googleapis.com/httpRequest"]) where (body != nil and body["logging.googleapis.com/httpRequest"] != nil)
+- delete_key(body, "logging.googleapis.com/httpRequest") where (body != nil and body["logging.googleapis.com/httpRequest"] != nil)
+- set(cache["value"], cache["__field_0"])
+- set(attributes["gcp.http_request"], cache["value"]) where (cache != nil and cache["value"] != nil)
+- delete_key(cache, "__field_0") where (cache != nil and cache["__field_0"] != nil)
+- set(cache["__field_0"], body["logging.googleapis.com/logName"]) where (body != nil and body["logging.googleapis.com/logName"] != nil)
+- delete_key(body, "logging.googleapis.com/logName") where (body != nil and body["logging.googleapis.com/logName"] != nil)
+- set(cache["value"], cache["__field_0"])
+- set(attributes["gcp.log_name"], cache["value"]) where (cache != nil and cache["value"] != nil)
+- delete_key(cache, "__field_0") where (cache != nil and cache["__field_0"] != nil)
+- set(cache["__field_0"], body["logging.googleapis.com/severity"]) where (body != nil and body["logging.googleapis.com/severity"] != nil)
+- delete_key(body, "logging.googleapis.com/severity") where (body != nil and body["logging.googleapis.com/severity"] != nil)
+- set(cache["value"], cache["__field_0"])
+- set(severity_text, cache["value"]) where (cache != nil and cache["value"] != nil)
+- delete_key(cache, "__field_0") where (cache != nil and cache["__field_0"] != nil)
+- set(cache["__field_0"], body["logging.googleapis.com/sourceLocation"]) where (body != nil and body["logging.googleapis.com/sourceLocation"] != nil)
+- delete_key(body, "logging.googleapis.com/sourceLocation") where (body != nil and body["logging.googleapis.com/sourceLocation"] != nil)
+- set(cache["value"], cache["__field_0"])
+- set(attributes["gcp.source_location"], cache["value"]) where (cache != nil and cache["value"] != nil)
+- delete_key(cache, "__field_0") where (cache != nil and cache["__field_0"] != nil)
+- set(cache["__field_0"], body["logging.googleapis.com/spanId"]) where (body != nil and body["logging.googleapis.com/spanId"] != nil)
+- delete_key(body, "logging.googleapis.com/spanId") where (body != nil and body["logging.googleapis.com/spanId"] != nil)
+- set(cache["value"], cache["__field_0"])
+- set(span_id, cache["value"]) where (cache != nil and cache["value"] != nil)
+- delete_key(cache, "__field_0") where (cache != nil and cache["__field_0"] != nil)
+- set(cache["__field_0"], body["logging.googleapis.com/trace"]) where (body != nil and body["logging.googleapis.com/trace"] != nil)
+- delete_key(body, "logging.googleapis.com/trace") where (body != nil and body["logging.googleapis.com/trace"] != nil)
+- set(cache["value"], cache["__field_0"])
+- set(trace_id, cache["value"]) where (cache != nil and cache["value"] != nil)
+```
+
+Now in the new OTTL:
+
+
+```
+on log
+when log.body is aStringMessage(parsedJson(json))
+yield log with {
+  attributes: attributes with json["logging.googleapis.com/labels"] with {
+    "gcp.log_name": json["logging.googleapis.com/logName"]
+  },
+  spanID: StringToSpanID(json["logging.googleapis.com/spanId"]),
+  traceID: StringToTraceID(json["logging.googleapis.com/trace"]),
+  severity_text: json["logging.googleapis.com/severity"],
+  body: json with {
+    "logging.googleapis.com/labels": nil,
+    "logging.googleapis.com/logName": nil,
+    "logging.googleapis.com/severity": nil,
+    "logging.googleapis.com/sourceLocation": nil,
+    "logging.googleapis.com/spanId": nil,
+    "logging.googleapis.com/trace": nil,
+    "logging.googleapis.com/labels": nil,
+  },
+}
+```
+
+This assumes a few built-in functions:
+
+```go
+func aStringMessage(body *AnyValue) Option[String]
+func parsedJson(value *String) Option[AnyValue]
+// We'd also use a regex/strip method to remove extranous information prior to the span-id in the string.
+func StringToSpanId(value* String) SpanID
+func StringToTraceID(value* String) TraceID
+```
+
+And other features that may need syntactic changes:
+
+- we need "upsert" version of `with`
+- we assume we can assign `AnyVal` to strings here silently without failure.
+  Note: Current OTTL does this via coersions.
+- We can `with`` AnyVal to `Attributes` to join key-values. (Prototype currently does not allow)
+
