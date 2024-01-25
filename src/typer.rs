@@ -36,8 +36,23 @@ impl TypedStatementType {
 pub struct TypedStatement(pub StreamIdentifier, Option<TypedPatternMatch>, TypedStatementType, Option<TypedExpr>);
 
 impl TypedStatement {
+    pub fn stream_id(&self) -> StreamIdentifier {
+        self.0.clone()
+    }
     pub fn stream_type(&self) -> Type {
         self.2.stream_type()
+    }
+
+    pub fn opt_pattern(&self) -> Option<&TypedPatternMatch> {
+        self.1.as_ref()
+    }
+
+    pub fn statement_type(&self) -> &TypedStatementType {
+        &self.2
+    }
+
+    pub fn where_expr(&self) -> Option<&TypedExpr> {
+        self.3.as_ref()
     }
 }
 
@@ -53,8 +68,6 @@ pub enum TypedExpr {
     Accessor(Box<TypedExpr>, String, Type),
     BinaryOp(Box<TypedExpr>, BinaryOperator, Box<TypedExpr>, Type),
     Application(Box<TypedExpr>, Vec<TypedExpr>, Type),
-    
-
 }
 impl TypedExpr {
     // TODO - avoid cloning types...
@@ -758,7 +771,7 @@ impl Typer {
                 let unknown_result_type = self.new_variable();
                 let extractor_function_type: Type = self.unify(extractor_function_type, Type::Function(unknown_result_type, vec!(t.clone())))?;
                 match extractor_function_type.get_function_return_type()? {
-                    Type::Constructor(name, targs) if name == "Option" && targs.len() == 1 => {
+                    Type::Constructor(tname, targs) if tname == "Option" && targs.len() == 1 => {
                         // Now we match on the argument value of Option to see if it's a tuple and extract
                         // more patterns.
                         match &targs[0] {
@@ -793,6 +806,7 @@ impl Typer {
         Ok((TypedPatternMatch(Box::new(texpr), tpattern, None), next_typer))
     }
 
+    // TODO - we want to ensure the `Yield` expressions typechecks as the same as the stream identifier.
     pub fn type_statement(&mut self, e: Statement) -> Result<TypedStatement, TypeError> {
         match e {
             // Should we allow dropping everything?
@@ -933,7 +947,33 @@ mod tests {
         let result: TypedStatement = parse_statement_and_type(&mut typer, "on metric when metric is aSum(sum) yield metric with { sum: sum }").unwrap();
         // TODO - write a real test here.
         assert_eq!(result.stream_type(), Type::Simple("Metric"));
-        panic!("{result:?}")
+        assert!(result.where_expr().is_none(), "Did not expect where expression: {:?}", result.where_expr());
+        match result.statement_type() {
+            TypedStatementType::Drop => panic!("Unexpected statement {result:?}, wanted yield found drop."),
+            TypedStatementType::Yield(expr) => {
+                assert_eq!(expr.my_type(), Type::Simple("Metric"))
+            },
+        }
+        // Now check pattern matching stuff.
+        match result.opt_pattern() {
+            Some(TypedPatternMatch(texpr, pattern, guard)) if guard.is_none() => {
+                assert_eq!(texpr.my_type(), Type::Simple("Metric"));
+                if let TypedExtractor::Pattern(name, exprs, tpe) = pattern {
+                    assert_eq!(name, "aSum");
+                    assert_eq!(tpe.clone(), Type::Simple("Sum"));
+                    match exprs.as_slice() {
+                        [TypedExtractor::Term(name, tpe)] => {
+                            assert_eq!(name, "sum");
+                            assert_eq!(tpe.clone(), Type::Simple("Sum"));
+                        },
+                        _ => panic!("Expected one match arg, found: {exprs:?}"),
+                    }
+                } else {
+                    panic!("Expected pattern, found {pattern:?}");
+                }
+            },
+            _ => panic!("Expected simple pattern match, found: {result:?}"),
+        }
     }
 
     #[test]
