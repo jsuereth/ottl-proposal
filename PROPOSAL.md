@@ -13,15 +13,29 @@ language is currently, purposefully, restricted. We believe the language can be 
 
 OTTL is an interpreted language. It takes expressions like `set(attribute["service.name"], "my-service") where attribute["service.name"] == nil` and executes them on streams of OTLP data.
 
+OTTL has the following design principles:
+
+- OTTL is intended as a domain-specific language (DSL) for telemetry mutation and generation, and is not intended to be used as a general-purpose programming language.
+- OTTL has been designed to work directly with `pdata`, but can operate on other data formats.
+
 OTTL exposes the following to the runtime environment:
 
 - An "execution scope" it will execute against, e.g. `metric`, `resource`, `log`, etc.
 - A statement to execute which will manipulate a type of telemetry.
 - A boolean expression which determins whether its statement should be executed.
 
-TODO - more
+Additionally, OTTL, today, loosely defines the [terms and paths](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/LANGUAGE.md#paths) it allows. One consequence of this
+is that it's implementation specific what paths may be legal, meaning that OTTL can only ever have
+one valid implementation, the one in the collector contrib repository.
+
+Finally, OTTL provides a loose set of coercion rules on types, outlined as [comparison rules](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/LANGUAGE.md#comparison-rules).
+Given OTTL doesn't enforce types, this describes the runtime checks and coercion that must happen on
+any interaction.
 
 ## Collection of complaints
+
+After transitioning from custom collector processors and previous transform processors, we've collected
+feedback from developers and also known issues opened against OTTL.
 
 - Artificial distinction between rvalues and statements (e.g. ParseJSON can be used as an rvalue, but replace_pattern has no value and can only write to a field)
 - very limited condition support (statements can only have a single condition, structured as foo() where baz); I think I want a ternary operator
@@ -52,7 +66,7 @@ At a high level we propose the following:
 
 - Migrate to a stateful lexer to improve literal support.
   - This would allow supporting string-formatting literals, e.g. "I can reference {expression}s"
-  - TODO - other fixes from complaints as needed.
+  - This can help prevent/reduce "reserved keywords" while expanding the language.
 - Add a type system for better "prior to evaluation" error messages, including the ability to
   get error messages without running the collector. (e.g. Go, Rust, Typescript) 
 - Allow operations to operate against structural data, prefarrable with a JSON-like feel. (e.g. Jsonix, TypeScript, Dart)
