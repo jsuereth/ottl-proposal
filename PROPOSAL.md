@@ -64,6 +64,10 @@ At a high level we propose the following:
   - This *should* replace need for: `limit`, `truncate_all`, `replace_*`, `keep_keys`, `delete_keys`.
 - We move to a multi-phase compilation so that we can not only add type checking but erase more advanced
   features (e.g. structural merging, list-comprehensions) to simpler features for evaluation.
+- Body, as an `AnyValue`, requires lots of typechecking in every statement.  You wind up with similar
+  code in the statement + the where.
+- Pattern matching, to simplify dealing with generic `AnyValue` attributes and log bodies, reducing the need
+  to duplicate intent between `where` clause and statements.
 
 ### Prototype Grammar
 
@@ -73,7 +77,8 @@ Example:
 
 ```
 On <context>
-Yield <expr>
+( <pattern> ) ?
+(Drop | Yield <expr>)
 ( Where <expr> ) ?
 ```
 
@@ -83,10 +88,78 @@ This matches the output of:
 - A statement to execute which will manipulate a type of telemetry.
 - A boolean expression which determins whether its statement should be executed.
 
+However, this introduces a new notion, "Pattern" where you can both test if a particular value is of a type
+and extract that type for usage in the statement at the same time.
 
-We introduce new expressions:
+In addition to patterns, we also introduce new expresions.
+
+#### Pattern Matching
+
+We propose adding patterns to OTTL grammar.  A pattern defines both a filter that will participate
+in what was previously only the `where` clause, but also defines new terms (names) that can directly reference typed values from more generic structures.
+
+The pattern grammar is specified as:
+
+```
+<pattern> := 
+      `WHEN` <expr> `AS` <extraction> ('if' <expr> )?
+<extraction> :=
+     <identifier> |
+     <extraction-function> '(' opt_repeated(<extraction>, ',')* ')'
+```
+
+We would provide the following built-in extraction functions:
+
+```
+Boolean({id}: bool)
+Bytes({id}: List[u8])
+Int({id}: i64)
+Double({id}: f64)
+List({id}: List[AnyValue])
+Map({id}: Map[Anyvalue])
+```
+
+These should mirror existing conversion functions in OTTL.
+
+Example usage would be:
+
+```
+ON log
+WHEN log.body AS String(content) if content != Nil
+YIELD log with {
+  attributes: parse_regex_to_attributes("^Host=(?P<host>[^,]+), Type=(?P<type>.*)$", content)
+}
+```
+
+Here, we are looking for logs that contain bodies that are string and attempt to parse out host/type syntax from them and apply these to the attributes.  The `WHEN` clause features as both part of the boolean expression when to enable the OTTL statement as well as performing extraction of content in the final
+statement (the `content` term).
+
+
+Extraction functions are simply built-in functions that return optional results.
+
+```
+Boolean = (AnyVal) Optional[bool]
+Bytes = (AnyVal) Optional[Bytes]
+Int = (AnyVal) Optional[Int]
+Double = (AnyVal) Optional[Double]
+List = (AnyVal) Optional[List[AnyVal]]
+Map = (AnyVal) Optional[Map[String, AnyVal]]
+```
+
+Additionally, we can provide structural pattern matching in the future where needed, e.g. we could evolve into:
+
+```
+On log
+WHEN log.body AS {
+  "event.name": "some-exact-value",
+  "payload": payload
+} if payload.some.nested.attribute == "SomeValue"
+DROP
+```
 
 #### New Binary Expressions
+
+We propose adding new binary expressions to help resolve some syntactical hurdles in the existing Language.
 
 ```
 <expr> '.' <identifier> # More complicated "accessor" patterns.
@@ -94,12 +167,40 @@ We introduce new expressions:
 <expr> 'in' <expr>    # Contains expression
 ```
 
-- Merge: Overrides fields in the left with fields found in the partial structure on the right
-- Contains: Returns true if the expression on the left is found in the container on the right.
-  TODO - what to do about key-values?
-- Allow accessing members from any expression, but limit with the type system.
+The `.` no longer being part of identifiers would allow accessing members from any expression. When combined
+with the type system and multi-phase compilation, we can still erase most `foo.bar` syntax to a single lookup
+while also allowing expansion of syntax like `[ 'foo' ].length` if desired.
+
+A new `merge` operation would provide similar value as `merge_maps` but exectue generically on any
+type with structure. When combined with [Structural Expressions](#structural-expressions), we can use this to flatten what would today be multiple OTTL statments. For Example:
+
+```
+set(metric.name, "name") where ...
+set(metric.description, "new desription") where ...
+```
+
+could be:
+
+```
+on metric
+where ...
+yield metric with {
+  name: "name",
+  description: "description"
+}
+```
+
+The new `merge` operation could be erased in multi-phase compilation to a series of `set` operations.
+
+
+The `in` operator would proivde a mechanism to check lists/maps, solving https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29289.
+
+
 
 #### Structural Expressions
+
+We propose adding new structural literals that allow users to define data overrides in a syntax that
+matches the hierarchy they see.
 
 ```
 <structural-literal> := '{' <field-assignment>* '}'

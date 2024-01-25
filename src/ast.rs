@@ -15,7 +15,7 @@ pub enum BinaryOperator {
 pub enum Expr {
     Id(String),                                             // {identifier}
     List(Vec<Expr>),                                        // '[' {expr}* ']'
-    StructureConstruction(Vec<FieldAssignment>), // '{' {fields} '}'
+    StructureConstruction(Vec<FieldAssignment>),            // '{' {fields} '}'
     Nil,                                                    // 'nil'
     Bool(bool),                                             // ('true' | 'false')
     String(String),                                         // {string}
@@ -43,11 +43,45 @@ impl FieldAssignment {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Stream(StreamIdentifier, Box<Expr>, Option<Expr>);
+pub enum StatementType {
+    Drop,
+    Yield(Box<Expr>),
+}
 
-impl Stream {
-    pub fn new(id: StreamIdentifier, expr: Expr, filter: Option<Expr>) -> Stream {
-        Stream(id, Box::new(expr), filter)
+#[derive(Clone, Debug, PartialEq)]
+pub enum Extractor {
+    // A term to use to identify the matched content.
+    Term(String),
+    // An extraction function and arguments/terms to use from its extraction.
+    Pattern(String, Vec<Extractor>),
+}
+
+// On {Box<Expr>} As {Pattern} (if <Expr>)?
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatternMatch(Box<Expr>, Extractor, Option<Expr>);
+
+impl PatternMatch {
+    pub fn new(expr: Expr, extractor: Extractor, condition: Option<Expr>) -> PatternMatch {
+        PatternMatch(Box::new(expr), extractor, condition)
+    }
+    pub fn source(&self) -> &Expr {
+        &self.0
+    }
+    pub fn pattern(&self) -> &Extractor {
+        &self.1
+    }
+    pub fn condition(&self) -> Option<&Expr> {
+        self.2.as_ref()
+    }
+}
+
+// Statement({context}, {pattern}?, {eval}, {where-expr})
+#[derive(Clone, Debug, PartialEq)]
+pub struct Statement(pub StreamIdentifier, pub Option<PatternMatch>, pub StatementType, pub Option<Expr>);
+
+impl Statement {
+    pub fn new(id: StreamIdentifier, patern: Option<PatternMatch>, expr: StatementType, filter: Option<Expr>) -> Statement {
+        Statement(id, patern, expr, filter)
     }
 }
 

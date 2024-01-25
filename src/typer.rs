@@ -8,6 +8,25 @@ type Substitutions = BTreeMap<u64, Type>;
 
 
 // TODO - Finish typed AST
+#[derive(Debug)]
+pub enum TypedExtractor {
+    Term(String, Type),
+    Pattern(String, Vec<TypedExtractor>, Type),
+}
+
+#[derive(Debug)]
+pub struct TypedPatternMatch(Box<TypedExpr>, TypedExtractor, Option<TypedExpr>);
+
+#[derive(Debug)]
+pub enum TypedStatementType {
+    Drop,
+    Yield(Box<TypedExpr>),
+}
+
+#[derive(Debug)]
+pub struct TypedStatement(pub StreamIdentifier, Option<TypedPatternMatch>, TypedStatementType, Option<TypedExpr>);
+
+#[derive(Debug)]
 pub enum TypedExpr {
     Id(String, Type),
     List(Vec<TypedExpr>, Type),
@@ -39,6 +58,8 @@ impl TypedExpr {
         }
     }
 }
+
+#[derive(Debug)]
 pub struct TypedFieldAssignment(String, Box<TypedExpr>);
 
 impl TypedFieldAssignment {
@@ -344,11 +365,12 @@ impl std::fmt::Display for TypeError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct StructSymbol {
     name: String,
     fields: BTreeMap<String, Type>,
 }
+#[derive(Clone)]
 pub struct SymbolTable {
     // Terms are name -> Nominal Types of that name.
     terms: BTreeMap<String, Type>,
@@ -364,6 +386,7 @@ impl SymbolTable {
             structs: BTreeMap::new(),
         }
     }
+
     fn lookup_id(&self, name: &str) -> Result<Type, TypeError> {
         match self.terms.get(name) {
             Some(tpe) => Ok(tpe.clone()),
@@ -379,7 +402,6 @@ impl SymbolTable {
               },              
             None => Err(TypeError::new_unable_to_find_symbol(&format!("{} on {}", member, typename))),
         }
-        
     }
 
 
@@ -503,18 +525,33 @@ impl Typer {
                     Err(TypeError::new_type_not_anyval(&other))
                 }
             },
+            (Type::Structural(lfields), Type::Structural(rfields)) => self.unify_structural_fields(lfields,rfields),            
+
             // Handle structural types.
+            // TODO - the structural type must EXACTLY match the constructor?
+            (tc @ Type::Constructor(_,_), s @ Type::Structural(_)) => Err(TypeError::new_types_not_equal(&tc, &s)),
+            (s @ Type::Structural(_), tc @ Type::Constructor(_, _)) => Err(TypeError::new_types_not_equal(&tc, &s)),
+        }
+    }
+
+    // Checks if lhs is a subtype of rhs. This will also
+    // propagate type inference from LHS to RHS if RHS is unknown.
+    fn unify_subtype(&mut self, lhs: Type, rhs: Type)-> Result<Type, TypeError> {
+        match (lhs, rhs) {
+            (lhs @ _, rhs @ Type::Variable(_)) => self.unify(lhs, rhs),
+            (other, Type::Nil) => Ok(other),
+            (Type::AnyValue, other) if other.is_any_value_compatible() => Ok(Type::AnyValue),
+            (Type::AnyValue, other) => Err(TypeError::new_type_not_anyval(&other)),
+            // We allow structural types with known fields ot unify with real types.
             (tc @ Type::Constructor(_,_), Type::Structural(rfields)) =>
-              self.unify_concrete_to_struct(tc, &rfields),
-
-
-            (Type::Structural(lfields), Type::Structural(rfields)) =>
-               self.unify_structural_fields(lfields,rfields),
-            
-            // TODO - We don't allow lhs <-> rhs Structural + Constructor unification.
-            // We get away with this because merging is directional.
-            // We should instead be checking compatiblity here and have a different method besides `unify` for assignability.
-            (Type::Structural(_), Type::Constructor(_, _)) => todo!(),
+              self.unify_concrete_to_struct_subtype(tc, &rfields),
+            (lhs @ Type::Constructor(_,_), rhs @ Type::Constructor(_,_)) => self.unify(lhs, rhs),
+            // We can unify with the subset of fields.
+            (Type::Structural(lfields), Type::Structural(rfields))  => todo!(),
+            (Type::Nil, other) => Err(TypeError::new_types_not_equal(&Type::Nil, &other)),
+            (Type::Variable(_), other) => Err(TypeError::new_with_custom(format!("Cannot assign {other} to unknown type!").as_ref())),
+            (lhs @ Type::Structural(_), rhs) => Err(TypeError::new_types_not_equal(&lhs, &rhs)),
+            (lhs, Type::AnyValue) => Err(TypeError::new_with_custom(&format!("Unable to assign AnyValue to {lhs}"))),
         }
     }
 
@@ -538,13 +575,13 @@ impl Typer {
         Ok(Type::Structural(result_fields))
     }
 
-    fn unify_concrete_to_struct(&mut self, concrete: Type, structure: &BTreeMap<String,Type>) -> Result<Type, TypeError> {
+    fn unify_concrete_to_struct_subtype(&mut self, concrete: Type, structure: &BTreeMap<String,Type>) -> Result<Type, TypeError> {
         // We recursively go through all of the fields in the structure and make
         // sure they exist in the concrete type.
         let structure_name = concrete.structure_name()?;
         for (field, field_type) in structure {
             let expected_type = self.scope.lookup_member(structure_name, field)?;
-            self.unify(expected_type, field_type.clone())?;
+            self.unify_subtype(expected_type, field_type.clone())?;
         }
         Ok(concrete)
     }
@@ -598,8 +635,8 @@ impl Typer {
         let rhs = self.type_expr(*rexpr)?;
         // TODO - Force both LHS + RHS to be structural types of some fashion.
 
-        // TODO - Unify is a poor choice here, we want something like it, but where lhs has precedence...
-        let rtype = self.unify(lhs.my_type(), rhs.my_type())?;
+        // We only check that the RHS will "fit" in the LHS.
+        let rtype = self.unify_subtype(lhs.my_type(), rhs.my_type())?;
         Ok(TypedExpr::BinaryOp(Box::new(lhs), BinaryOperator::With, Box::new(rhs), rtype))
     }
 
@@ -677,6 +714,92 @@ impl Typer {
             Expr::Int(value) => Ok(TypedExpr::Int(value)),
         }
     }
+
+    // Constructs a new Typer that can type check expressions for a given stream type.
+    fn new_typer_for(&self, id: StreamIdentifier) -> Typer {
+        let mut scope: SymbolTable = self.scope.clone();
+        match id {
+            StreamIdentifier::Metric => scope.register_simple_term("metric", Type::Simple("Metric")),
+            StreamIdentifier::Log => scope.register_simple_term("log", Type::Simple("Log")),
+            StreamIdentifier::Span => scope.register_simple_term("span", Type::Simple("Span")),
+            StreamIdentifier::SpanEvent => scope.register_simple_term("event", Type::Simple("SpanEvent")),
+        }
+        // TODO - inject symbols for the given stream type.
+        Typer {
+            // TODO - maybe current id needs to be safer?
+            current_id: self.current_id,
+            substitutions: self.substitutions.clone(),
+            scope,
+        }
+    }
+
+    // Figures out terms created by the extractor and gives them names and a type.
+    fn type_extractor(&mut self, e: Extractor, t: Type) -> Result<(TypedExtractor, Vec<(String, Type)>), TypeError> {
+        match e {
+            Extractor::Term(id) => Ok((TypedExtractor::Term(id.clone(), t.clone()), vec!((id, t)))),
+            Extractor::Pattern(name, args) => {
+                // We expect patterns to be functions from t => Optional[args]
+                let extractor_function_type = self.scope.lookup_id(&name)?;
+                let unknown_result_type = self.new_variable();
+                let extractor_function_type: Type = self.unify(extractor_function_type, Type::Function(unknown_result_type, vec!(t.clone())))?;
+                match extractor_function_type.get_function_return_type()? {
+                    Type::Constructor(name, targs) if name == "Option" && targs.len() == 1 => {
+                        // Now we match on the argument value of Option to see if it's a tuple and extract
+                        // more patterns.
+                        match &targs[0] {
+                            other if args.len() == 1 => {
+                                let (targ, names)  = self.type_extractor(args[0].clone(), other.clone())?;
+                                Ok((TypedExtractor::Pattern(name, vec!(targ), other.clone()), names))
+                            },
+                            // TODO - check for tuples of types and extract each one.
+                            _ => todo!(),
+                        }
+                    },
+                    other => Err(TypeError::new_with_custom(&format!("Pattern match expected extraction of {t} => Option[...], but found {other}"))),
+                }
+            },
+        }
+    }
+
+    // Returns the typed pattern and a typer to use when typing underlying expressions.
+    fn type_pattern(&mut self, pattern: PatternMatch) -> Result<(TypedPatternMatch, Typer), TypeError> {
+        let texpr = self.type_expr(pattern.source().clone())?;
+        // Figure out what terms are defined by the extraction and add them to the scope of the returned typer.
+        let (tpattern, new_symbols) = self.type_extractor(pattern.pattern().clone(), texpr.my_type())?;
+        let mut next_scope = self.scope.clone();
+        for (name, tpe) in new_symbols {
+            next_scope.terms.insert(name, tpe);
+        }
+        let next_typer = Typer {
+            current_id: self.current_id,
+            scope: next_scope,
+            substitutions: self.substitutions.clone(),
+        };
+        Ok((TypedPatternMatch(Box::new(texpr), tpattern, None), next_typer))
+    }
+
+    pub fn type_statement(&mut self, e: Statement) -> Result<TypedStatement, TypeError> {
+        match e {
+            // Should we allow dropping everything?
+            Statement(id, None, StatementType::Drop, None) => Ok(TypedStatement(id, None, TypedStatementType::Drop, None)),
+            Statement(id, None, StatementType::Yield(expr), None) => {
+                let mut next_typer = self.new_typer_for(id.clone());
+                let texpr = next_typer.type_expr(*expr)?;
+                // TODO - ensure texpr has no leaking type variables.
+                Ok(TypedStatement(id, None, TypedStatementType::Yield(Box::new(texpr)), None))
+            },
+            Statement(id, Some(pattern), StatementType::Yield(expr), None) => {
+                let mut next_typer = self.new_typer_for(id.clone());
+                let (tpattern, mut expr_typer) = next_typer.type_pattern(pattern)?;
+                let texpr = expr_typer.type_expr(*expr)?;
+                // Make sure we don't have conflicting type variables going forward.
+                self.current_id = std::cmp::max(self.current_id, expr_typer.current_id);
+                // TODO - make sure we have no leaking type variables here.
+                Ok(TypedStatement(id, Some(tpattern), TypedStatementType::Yield(Box::new(texpr)), None))
+            },
+            _ => todo!(),
+        }
+    }
 }
 
 
@@ -690,7 +813,6 @@ fn occurs_in(id: u64, tpe: &Type) -> bool {
         Type::Nil => false,
     }
 }
-
 
 // We always register standard types for OTTL.
 fn register_standard_types(typer: &mut Typer) {
@@ -723,17 +845,23 @@ fn register_standard_types(typer: &mut Typer) {
     // TODO - attributes
     // TODO - events
     // TODO - dropped_*
-    let span = StructSymbol {
+    let span: StructSymbol = StructSymbol {
         name: "Span".into(),
         fields: span_fields,
     };
     typer.scope_mut().register_structure(span);
+
+    // Here we register standard extractors.
+    typer.scope_mut().register_simple_term(
+        "Sum", 
+        Type::Function(Type::Constructor("Option".into(), vec!(Type::Simple("Sum"))), vec!(Type::Simple("Metric")))
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{parse_expr, mk_parser_input};
+    use crate::parser::{mk_parser_input, parse_expr, parse_statement};
 
 
     #[test]
@@ -750,6 +878,17 @@ mod tests {
         assert_eq!(format!("{}", Type::Structural(BTreeMap::from([("a".into(), Type::Int()), ("b".into(), Type::AnyValue)]))), "{a:Int, b:AnyValue}");
     }
 
+    fn parse_statement_and_type(typer: &mut Typer, input: &str) -> Result<TypedStatement, TypeError> {
+        let input = mk_parser_input(input);
+        let parse_result = parse_statement(input);
+        match parse_result {
+            Ok((rest, ast)) => {
+                assert_eq!(AsRef::<str>::as_ref(&rest), "", "Did not fully parse input!");
+                Ok(typer.type_statement(ast)?)
+            },
+            Err(err) => Err(TypeError::new_with_custom(&format!("{:?}", err))),
+        }
+    }
 
 
     fn parse_and_type(typer: &mut Typer, input: &str) -> Result<Type, TypeError> {
@@ -762,6 +901,13 @@ mod tests {
             },
             Err(err) => Err(TypeError::new_with_custom(&format!("{:?}", err))),
         }
+    }
+
+    #[test]
+    fn test_pattern_match() {
+        let mut typer = Typer::new(SymbolTable::new());
+        let result = parse_statement_and_type(&mut typer, "on metric when metric is Sum(sum) yield sum").unwrap();
+        panic!("{result:?}")
     }
 
     #[test]

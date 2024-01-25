@@ -2,13 +2,12 @@ mod string;
 
 use crate::ast::*;
 use nom::{
-    IResult,
-    bytes::complete::tag,
     branch::alt,
-    multi::{many0_count, separated_list0},
-    combinator::{recognize, value},
-    sequence::pair,
+    bytes::complete::tag,
     character::complete::{alpha1, alphanumeric1, multispace0, i64},
+    combinator::{opt, recognize, value},
+    multi::{many0_count, separated_list0},
+    sequence::pair, IResult, Parser
 };
 use nom_locate::LocatedSpan;
 use nom_recursive::{recursive_parser,RecursiveInfo};
@@ -156,25 +155,69 @@ pub fn parse_expr(input: Span) -> IResult<Span, Expr> {
     )(input)
 }
 
-fn parse_stream_identifier(input: Span) -> IResult<Span, StreamIdentifier> {
+fn parse_pattern(s: Span) -> IResult<Span, Extractor> {
+    let (s, id) = parse_identifier_raw(s)?;
+    let (s, _) = tag("(")(s)?;
+    let (s, _) = multispace0(s)?;
+    // TODO - multiple args
+    let (s, ex) = parse_pattern_extractor(s)?;
+    let (s, _) = multispace0(s)?;
+    let (s, _) = tag(")")(s)?;
+    Ok((s, Extractor::Pattern(id, vec!(ex))))
+}
+
+fn parse_pattern_extractor(s: Span) -> IResult<Span, Extractor> {
+    alt((parse_pattern,
+        parse_identifier_raw.map(|id| Extractor::Term(id)),
+    ))(s)
+}
+
+fn parse_pattern_match(s: Span) -> IResult<Span, PatternMatch> {
+    let (s, _) = tag("when")(s)?;
+    let (s, _) = multispace0(s)?;
+    let (s, expr) = parse_expr(s)?;
+    let (s, _) = multispace0(s)?;
+    let (s, _) = tag("is")(s)?;
+    let (s, _) = multispace0(s)?;
+    let (s, ex) = parse_pattern_extractor(s)?;
+    // TODO - handle if expressions.
+    Ok((s, PatternMatch::new(expr, ex, None)))
+}
+
+
+fn parse_stream_identifier(s: Span) -> IResult<Span, StreamIdentifier> {
     alt((
         value(StreamIdentifier::Metric, tag("metric")),
         value(StreamIdentifier::Log, tag("log")),
         value(StreamIdentifier::Span, tag("span")),
         value(StreamIdentifier::SpanEvent, tag("spanevent")),
+    ))(s)
+}
+
+fn parse_yield_statement_type(s: Span) -> IResult<Span, StatementType> {
+    let (s, _) = tag("yield")(s)?;
+    let (s, _) = multispace0(s)?;
+    let (s, expr) = parse_expr(s)?;
+    Ok((s, StatementType::Yield(Box::new(expr))))
+}
+
+fn parse_statement_type(input: Span) -> IResult<Span, StatementType> {
+    alt((
+        value(StatementType::Drop, tag("drop")),
+        parse_yield_statement_type,
     ))(input)
 }
 
-pub fn parse_stream(input: Span) -> IResult<Span, Stream> {
-    let (input, _) = tag("from")(input)?;
+pub fn parse_statement(input: Span) -> IResult<Span, Statement> {
+    let (input, _) = tag("on")(input)?;
     let (input, _) = multispace0(input)?;
     let (input, id) = parse_stream_identifier(input)?;
     let (input, _) = multispace0(input)?;
-    // TODO - optional where expression
-    let (input, _) = tag("yield")(input)?;
+    let (input, pm) = opt(parse_pattern_match)(input)?;
     let (input, _) = multispace0(input)?;
-    let (input, expr) = parse_expr(input)?;
-    Ok((input, Stream::new(id, expr, None)))
+    // TODO - optional where expression
+    let (input, st) = parse_statement_type(input)?;
+    Ok((input, Statement::new(id, pm, st, None)))
 }
 
 pub fn mk_parser_input(input: &str) -> Span {
@@ -296,5 +339,46 @@ mod tests {
             BinaryOperator::With,
             Box::new(Expr::Id("bar".to_string())),
         ));
+    }
+
+    #[test]
+    fn test_parse_pattern_match() {
+        let result = fully_parse(parse_pattern_match, 
+            "when metric is Sum(sum)");
+        assert_eq!(result, PatternMatch::new(Expr::Id("metric".into()), 
+          Extractor::Pattern("Sum".into(), vec!(Extractor::Term("sum".into()))), None));
+    }
+
+    #[test]
+    fn test_parse_statement() {
+        let result = fully_parse(parse_statement, 
+            "on metric when metric is Sum(sum) yield metric with { sum: { count: sum.count+1 } }");
+        assert_eq!(result, Statement::new(
+            StreamIdentifier::Metric, 
+            Some(PatternMatch::new(Expr::Id("metric".into()), 
+              Extractor::Pattern("Sum".into(), vec!(Extractor::Term("sum".into()))), None)), 
+            StatementType::Yield(
+                Box::new(Expr::BinaryOp(
+                    Box::new(Expr::Id("metric".into())),
+                    BinaryOperator::With,
+                    Box::new(Expr::StructureConstruction([
+                        FieldAssignment::new("sum".into(),
+                            Expr::StructureConstruction([
+                                FieldAssignment::new("count".into(),
+                                    Expr::BinaryOp(
+                                        Box::new(Expr::Accessor(
+                                            Box::new(Expr::Id("sum".into())),
+                                            "count".into()
+                                        )),
+                                        BinaryOperator::Plus,
+                                        Box::new(Expr::Int(1))
+                                    )
+                            )
+                            ].into())
+                        )
+                    ].into()))
+                ))
+            ),
+            None));
     }
 }
