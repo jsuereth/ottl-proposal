@@ -3,7 +3,7 @@ mod string;
 use crate::ast::*;
 use nom::{
     branch::alt,
-    bytes::complete::tag,
+    bytes::{complete::tag, streaming::take_until},
     character::complete::{alpha1, alphanumeric1, multispace0, i64},
     combinator::{opt, recognize, value},
     multi::{many0_count, separated_list0},
@@ -134,6 +134,13 @@ fn parse_bool(s: Span) -> IResult<Span, Expr> {
     ))(s)
 }
 
+fn parse_string(s: Span) -> IResult<Span, Expr> {
+    let (s, _) = tag("\"")(s)?;
+    let (s, value) = take_until("\"")(s)?;
+    let (s, _) = tag("\"")(s)?;
+    Ok((s, Expr::String(value.to_string())))
+}
+
 // TODO - Figure out.
 // fn parse_string(s: Span) -> IResult<Span, Expr> {
 //     let (s, value) = string::parse_string(&s)?;
@@ -149,6 +156,7 @@ pub fn parse_expr(input: Span) -> IResult<Span, Expr> {
         parse_structure_construction,
         parse_list,
         parse_nil,
+        parse_string,
         parse_int,
         parse_bool,
         parse_identifer)
@@ -236,6 +244,12 @@ mod tests {
         let (unparsed, result) = parser(real_input).unwrap();
         assert_eq!(AsRef::<str>::as_ref(&unparsed), "", "Did not fully parse input!");
         result
+    }
+
+    #[test]
+    fn test_parse_string_literal() {
+        let result = fully_parse(parse_expr, "\"Test String\"");
+        assert_eq!(result, Expr::String("Test String".into()));
     }
 
     #[test]
