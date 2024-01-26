@@ -7,11 +7,11 @@ A modest proposal for improving OTTL
 Today OTTL is a scripting language for the OpenTelemetry Collector that simplifies/unifies common
 OTLP transformation activities, like adding attributes to resources or data points. It is rapidly gaining in
 popularity and provides an important baseline featureset for enabling OTLP pipelines. However, the
-language is currently, purposefully, restricted. We believe the language can be improved while still preserving functoinality.
+language is currently, purposefully, restricted. We believe that the current form of the language limits its usefulness for problems that customers need to adopt OTLP at scale. We propose an alternative scripting language that addresses these gaps.
 
 ## Review of today's OTTL
 
-OTTL is an interpreted language. It takes expressions like `set(attribute["service.name"], "my-service") where attribute["service.name"] == nil` and executes them on streams of OTLP data.
+OTTL is an interpreted language that takes expressions like `set(attribute["service.name"], "my-service") where attribute["service.name"] == nil` and executes them on streams of OTLP data.
 
 OTTL has the following design principles:
 
@@ -22,11 +22,9 @@ OTTL exposes the following to the runtime environment:
 
 - An "execution scope" it will execute against, e.g. `metric`, `resource`, `log`, etc.
 - A statement to execute which will manipulate a type of telemetry.
-- A boolean expression which determins whether its statement should be executed.
+- A boolean expression which determines whether its statement should be executed.
 
-Additionally, OTTL, today, loosely defines the [terms and paths](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/LANGUAGE.md#paths) it allows. One consequence of this
-is that it's implementation specific what paths may be legal, meaning that OTTL can only ever have
-one valid implementation, the one in the collector contrib repository.
+Additionally, OTTL, today, loosely defines the [terms and paths](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/LANGUAGE.md#paths) it allows. We believe that OTTL can have a much greater impact if its behavior can be fully described by a specification. For example, it will be possible to implement OTTL in programming languages and environments other than the OTel collector.
 
 Finally, OTTL provides a loose set of coercion rules on types, outlined as [comparison rules](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/LANGUAGE.md#comparison-rules).
 Given OTTL doesn't enforce types, this describes the runtime checks and coercion that must happen on
@@ -40,7 +38,7 @@ feedback from developers and also known issues opened against OTTL.
 - Artificial distinction between rvalues and statements (e.g. ParseJSON can be used as an rvalue, but replace_pattern has no value and can only write to a field)
 - very limited condition support (statements can only have a single condition, structured as foo() where baz); I think I want a ternary operator
 - inconsistent and surprising syntax limitations (parentheses cannot be safely added around any expression, Boolean values can't be used as conditions without appending == true, time values can't be stored in cache fields, etc)
-- Even trivial manipulation requires a specific "built-in" function, e.g.
+- Many transformation functions have only trivial differences, and many use cases wind up adding new, subtly different, "built-in" functions to OTTL. e.g.
   - `set`
   - `delete_key`
   - `delete_keys`
@@ -52,36 +50,28 @@ feedback from developers and also known issues opened against OTTL.
   - `truncate_all`
   - `limit`
   - Isn't `set(attributes["key"], nil)` the same as `delete_key(attributes, "key")` ?
-- Inconsistency in identifier lookups. trace_id.string and trace_id["string"] don't refer to the same thing
-  even though body.string and body["string"] do.
-- Dealing with lists: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29289
-- Lack of Contains/"in" operator: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29289
-- Identifying if a given expressoin *only* touches hierarchical components, e.g. looking at resource
-  but not log when modifying logs: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29016
-- Statements do NOT include the context they operator on: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29017
+- Inconsistency in identifier lookups. trace_id.string and trace_id["string"] don't refer to the same thing even though body.string and body["string"] do.
+- Dealing with lists (lack of "contains" or "in" operator): https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29289
+- Identifying if a given expression *only* touches hierarchical components, e.g. looking at resource but not log when modifying logs: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29016
+- Statements do NOT include the context they operate on: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29017
 
 ## Proposals
 
 At a high level we propose the following:
 
-- Migrate to a stateful lexer to improve literal support.
-  - This would allow supporting string-formatting literals, e.g. "I can reference {expression}s"
-  - This can help prevent/reduce "reserved keywords" while expanding the language.
+
+- Supporting string-formatting literals, e.g. "I can reference {expression}s"
 - Add a type system for better "prior to evaluation" error messages, including the ability to
   get error messages without running the collector. (e.g. Go, Rust, Typescript) 
-- Allow operations to operate against structural data, prefarrable with a JSON-like feel. (e.g. Jsonix, TypeScript, Dart)
+- Allow operations to operate against structural data, preferably with a JSON-like feel. (e.g. [Jsonnet](https://jsonnet.org/) TypeScript, Dart)
   - Assign multiple values at the same time.
-  - Have the visual structural mirrored in the code.
-- Provide List comprehenesions (e.g. Typescript, Python, Kotlin) that simplifies operating against
-  lists or "KeyValueList" i.e. Attributes.
+  - Have the visual structure mirrored in the code.
+- Provide List comprehensions (e.g. Typescript, Python, Kotlin) that simplifies operating against
+  lists of "KeyValueList" i.e. Attributes.
   - This should dramatically reduce need for built-in functions to be worthwhile.
   - This *should* replace need for: `limit`, `truncate_all`, `replace_*`, `keep_keys`, `delete_keys`.
-- We move to a multi-phase compilation so that we can not only add type checking but erase more advanced
-  features (e.g. structural merging, list-comprehensions) to simpler features for evaluation.
-- Body, as an `AnyValue`, requires lots of typechecking in every statement.  You wind up with similar
-  code in the statement + the where.
-- Pattern matching, to simplify dealing with generic `AnyValue` attributes and log bodies, reducing the need
-  to duplicate intent between `where` clause and statements.
+- Pattern matching or "binding patterns", to simplify dealing with generic `AnyValue` attributes and log bodies, reducing the need to duplicate intent between `where` clause and statements.
+- (optional) - Only reserve new keywords in "stateful" context.  (This would require migrating to a stateful lexer, but could help avoid reducing the available identifiers).
 
 ### Prototype Grammar
 
@@ -100,12 +90,11 @@ This matches the output of:
 
 - An "execution scope" it will execute against, e.g. `metric`, `resource`, `log`, etc.
 - A statement to execute which will manipulate a type of telemetry.
-- A boolean expression which determins whether its statement should be executed.
+- A boolean expression which determines whether its statement should be executed.
 
-However, this introduces a new notion, "Pattern" where you can both test if a particular value is of a type
-and extract that type for usage in the statement at the same time.
+However, this introduces a new notion, "Pattern" where you can both test if a particular value is of a type and extract that type for usage in the statement at the same time.
 
-In addition to patterns, we also introduce new expresions.
+In addition to patterns, we also introduce new expressions.
 
 #### Pattern Matching
 
@@ -116,7 +105,7 @@ The pattern grammar is specified as:
 
 ```
 <pattern> := 
-      `WHEN` <expr> `AS` <extraction> ('if' <expr> )?
+      `WHEN` <expr> `IS` <extraction> ('IF' <expr> )?
 <extraction> :=
      <identifier> |
      <extraction-function> '(' opt_repeated(<extraction>, ',')* ')'
@@ -139,7 +128,7 @@ Example usage would be:
 
 ```
 ON log
-WHEN log.body AS String(content) if content != Nil
+WHEN log.body IS String(content) if content != Nil
 YIELD log with {
   attributes: parse_regex_to_attributes("^Host=(?P<host>[^,]+), Type=(?P<type>.*)$", content)
 }
@@ -167,9 +156,11 @@ On log
 WHEN log.body AS {
   "event.name": "some-exact-value",
   "payload": payload
-} if payload.some.nested.attribute == "SomeValue"
+} IF payload.some.nested.attribute == "SomeValue"
 DROP
 ```
+
+Note: If this proposal is accepted, we do think a separate, pattern matching specific proposal should be generated that would outline major use cases and refine syntax/support needed from built-in functions.
 
 #### New Binary Expressions
 
@@ -185,12 +176,12 @@ The `.` no longer being part of identifiers would allow accessing members from a
 with the type system and multi-phase compilation, we can still erase most `foo.bar` syntax to a single lookup
 while also allowing expansion of syntax like `[ 'foo' ].length` if desired.
 
-A new `merge` operation would provide similar value as `merge_maps` but exectue generically on any
-type with structure. When combined with [Structural Expressions](#structural-expressions), we can use this to flatten what would today be multiple OTTL statments. For Example:
+A new `merge` operation would provide similar value as `merge_maps` but execute generically on any
+type with structure. When combined with [Structural Expressions](#structural-expressions), we can use this to flatten what would today be multiple OTTL statements. For Example:
 
 ```
 set(metric.name, "name") where ...
-set(metric.description, "new desription") where ...
+set(metric.description, "new description") where ...
 ```
 
 could be:
@@ -207,7 +198,7 @@ yield metric with {
 The new `merge` operation could be erased in multi-phase compilation to a series of `set` operations.
 
 
-The `in` operator would proivde a mechanism to check lists/maps, solving https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29289.
+The `in` operator would provide a mechanism to check lists/maps/keyvallists, solving https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29289.
 
 
 
@@ -218,7 +209,7 @@ matches the hierarchy they see.
 
 ```
 <structural-literal> := '{' <field-assignment>* '}'
-<field-assignemtn> := <field-name> ':' <expr> (',')?
+<field-assignment> := <field-name> ':' <expr> (',')?
 ```
 
 ### Type System
@@ -237,11 +228,11 @@ TODO - Formal specification & inference rules
 
 - `Nil` is a subtype of all types.
 - `Bool`, `Int`, `Double`, `Bytes`, `ArrayValue`, `KeyValueList` are subtypes of `AnyValue`.
-- A `Structural` type is mergable with a named type IFF the `fields` of the structural type
+- A `Structural` type is mergeable with a named type IFF the `fields` of the structural type
   are assignable to fields of the named type.
 
 We have an ad-hoc type inference system in place.  When inferring the type of a `List`, it is able
-to unify `Nil` => {special primitive types} => `AnyValue`.  This means lists are guaranteed to infer to either `List[AnyValue]` (heterogenous) or `List[A]` (homogenous).
+to unify `Nil` => {special primitive types} => `AnyValue`.  This means lists are guaranteed to infer either `List[AnyValue]` (heterogeneous) or `List[A]` (homogenous).  Disallowing heterogeneous lists could be done as a post-type-check error.
 
 ### OTTL Compiler Phases.
 
@@ -363,15 +354,18 @@ This assumes a few built-in functions:
 ```go
 func aStringMessage(body *AnyValue) Option[String]
 func parsedJson(value *String) Option[AnyValue]
-// We'd also use a regex/strip method to remove extranous information prior to the span-id in the string.
+// We'd also use a regex/strip method to remove extraneous information prior to the span-id in the string.
 func StringToSpanId(value* String) SpanID
 func StringToTraceID(value* String) TraceID
 ```
 
 And other features that may need syntactic changes:
 
-- we need "upsert" version of `with`
-- we assume we can assign `AnyVal` to strings here silently without failure.
-  Note: Current OTTL does this via coersions.
-- We can `with`` AnyVal to `Attributes` to join key-values. (Prototype currently does not allow)
+- we need "upsert" "insert" and "update" versions of `with`, possibly `or` (update) for the attributes merge:
 
+   ```attributes or json[".../labels"] or { "gcp.log_name": json[".../logName"] }```
+
+
+- we assume we can assign `AnyVal` to strings here silently without failure.
+  Note: Current OTTL does this via coercions.
+- We can `with`` AnyVal to `Attributes` to join key-values. (Prototype currently does not allow)
